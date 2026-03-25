@@ -1,0 +1,57 @@
+Q1,Q2,Q3,Q4_1,Q4_2,Q4_3,Q5,Q6,Q7,Q8,Q9,Q18,Q14,Q15,Q16
+What is your proficiency with financial concepts?,What is your proficiency with machine learning?,"Given the above explanation of what a linear regression model is, how confident do you feel about your understanding of linear regression?","Given the following linear regression model equation, rank the variables in terms of their explanato - Weighted Average Price Variance (WAP)","Given the following linear regression model equation, rank the variables in terms of their explanato - Number of Orders","Given the following linear regression model equation, rank the variables in terms of their explanato - Bid Ask Spread (BAS)",Determine the output (Volatility) of the following linear regression model given its equation and set of sample inputs.,"Given the above explanation of what a HAV model is, how confident do you feel about your understanding of HAV?",What are the input variable/s used in the HAV model?,"Based on sample historical volatility values and HAV equation, what volatility value does the HAV model predict for t=7?
+
+
+
+
+
+
+
+Potentially helpful working out
+
+0.3 x Average(t=1 to t=5) = 0.00618
+
+0.3 x Average(t=2 to t=6) = 0.00768
+
+0.3 x Average(t=1 to to=6) = 0.0064
+
+
+
+0.6 x Realised Volatility of t=5 = 0.0144
+
+0.6 x Realised Volatility of t=6 = 0.015","Given the above explanation of what a SVM model is, how confident do you feel about your understanding of SVM?","Suppose you are using a Linear SVM classifier with two-class classification problem. You have been given the following data in which some points are circled red that represent support vectors.
+
+If any one of the support vectors in the ""-"" class are removed, would the hyperplane change?","Given the above explanation of what a random forest model is, how confident do you feel about your understanding of random forests?","Given the following decision tree diagram and set of input variables, what would the decision tree predict?
+
+Set of inputs: 
+Outlook - Sunny
+Wind - Weak
+Humidity - Normal",What would be the ultimate prediction made by the random forest model based on the collective predictions of its decision trees?
+"{""ImportId"":""QID1""}","{""ImportId"":""QID2""}","{""ImportId"":""QID6""}","{""ImportId"":""QID7_1""}","{""ImportId"":""QID7_2""}","{""ImportId"":""QID7_3""}","{""ImportId"":""QID8_TEXT""}","{""ImportId"":""QID9""}","{""ImportId"":""QID10""}","{""ImportId"":""QID12_TEXT""}","{""ImportId"":""QID13""}","{""ImportId"":""QID21""}","{""ImportId"":""QID14""}","{""ImportId"":""QID15""}","{""ImportId"":""QID16_TEXT""}"
+Intermediate proficiency (Some understanding of financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Basic understanding,3,2,1,120.200125,Strong understanding,"Historical volatility,Weighted Average Price",0.02118,Strong understanding,No,Strong understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Strong understanding,3,2,1,120.200125,Good understanding,Historical volatility,0.02268,Strong understanding,Yes,Good understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Good understanding,3,2,1,120.2 + error,Basic understanding,Historical volatility,0.02118,Strong understanding,No,Good understanding,Yes,16.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Good understanding,3,2,1,120.200125,Basic understanding,Historical volatility,?,Basic understanding,Yes,Good understanding,Yes,sum(decisions)/N
+Intermediate proficiency (Some understanding of financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Strong understanding,3,2,1,120.200125,Good understanding,Weighted Average Price,0.02268,Good understanding,Yes,Good understanding,Yes,6.0
+Zero/minimal (No/very little exposure to financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Good understanding,3,2,1,no comment,Limited understanding,Weighted Average Price,0,Basic understanding,Yes,Basic understanding,No,5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Strong understanding,3,2,1,120.2,Strong understanding,Historical volatility,0.02058,Basic understanding,No,Good understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Good understanding,3,2,1,120,Basic understanding,Historical volatility,0.01092,Basic understanding,No,Good understanding,Yes,1
+Intermediate proficiency (Some understanding of financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Basic understanding,3,2,1,120.200,Basic understanding,Historical volatility,0.02058,Basic understanding,Yes,Basic understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Basic understanding,3,2,1,120.200125,Basic understanding,Historical volatility,0.02268,Limited understanding,Yes,Limited understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Good understanding,3,2,1,120.20 + E,Limited understanding,Historical volatility,0.0214,Good understanding,Yes,Basic understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Good understanding,3,2,1,120.200125,Limited understanding,Historical volatility,0.02268,Good understanding,Yes,Basic understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Strong understanding,3,2,1,120.199225,Basic understanding,Historical volatility,0.02268,Good understanding,Yes,Good understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Basic understanding,2,1,3,120.2,Limited understanding,Historical volatility,0.02268,Basic understanding,Yes,Good understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Good understanding,3,2,1,120.20,Basic understanding,Historical volatility,0.02118,Good understanding,Yes,Strong understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Limited understanding,3,2,1,120.2 + e,Basic understanding,Historical volatility,0.0214,Basic understanding,No,Basic understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Good understanding,3,1,2,120.2001,Limited understanding,Historical volatility,Not sure,Basic understanding,Yes,Limited understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Basic understanding,3,2,1,120,Limited understanding,Historical volatility,0.02268,Basic understanding,Yes,Basic understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Good understanding,3,2,1,120.3514,Basic understanding,"Historical volatility,Weighted Average Price,Bid Ask Spread",0.079,Good understanding,Yes,Good understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Strong understanding,3,2,1,120,Basic understanding,Historical volatility,not sure,Good understanding,Yes,Strong understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Strong understanding,3,2,1,120.200125,Good understanding,Historical volatility,0.02268,Strong understanding,Yes,Strong understanding,Yes,5.5
+Advanced (Fluency in financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Good understanding,3,2,1,120.200125,Good understanding,Historical volatility,0.02118,Good understanding,Yes,Basic understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Strong understanding,3,2,1,120.200125,Good understanding,Historical volatility,0.02118,Basic understanding,Yes,Good understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Advanced (Fluency in machine learning concepts/terminology),Strong understanding,3,2,1,120.200125,Good understanding,Historical volatility,0.02118,Strong understanding,Yes,Good understanding,Yes,5.5
+Intermediate proficiency (Some understanding of financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Basic understanding,3,2,1,120.200125,Strong understanding,Historical volatility,0.02118,Strong understanding,Yes,Basic understanding,Yes,5.5
+Zero/minimal (No/very little exposure to financial concepts/terminology),Zero/minimal (No/very little exposure to machine learning concepts/terminology),Good understanding,3,2,1,120.2 + Epsilon,Good understanding,Weighted Average Price,0.02268,Basic understanding,Yes,Basic understanding,Yes,Yes
+Zero/minimal (No/very little exposure to financial concepts/terminology),Intermediate proficiency (Some understanding of machine learning concepts/terminology),Strong understanding,3,2,1,120.000325,Strong understanding,"Historical volatility,Weighted Average Price",0.02268,Strong understanding,Yes,Strong understanding,Yes,5.5
