@@ -1,0 +1,944 @@
+---
+title: "DATA3888 Optiver Project"
+output: html_document
+date: "2024-05-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load necessary libraries
+library(e1071)
+library(tidyverse)
+library(randomForest)
+library(pracma)
+library(miscTools)
+```
+
+```{r, message=FALSE}
+#stock = read.csv('Optiver_additional data/order_book_feature.csv', sep='\t')
+#save(stock, file='stock.RData')
+#target = read.csv('Optiver_additional data/order_book_target.csv', sep='\t')
+#save(target, file='target.RData')
+
+load('../data/stock.RData')
+load('../data/target.RData')
+stock_IDs = unique(stock['stock_id'])
+
+# Group timeIDs by quarters
+time_IDs = read.csv('../data/time_id_reference.csv')
+Q1 = time_IDs |> filter(date >= '2021-01-01' & date <= '2021-03-31') 
+Q2 = time_IDs |> filter(date >= '2021-04-01' & date <= '2021-06-30')
+Q3 = time_IDs |> filter(date >= '2021-07-01' & date <= '2021-09-30')
+Q4 = time_IDs |> filter(date >= '2021-10-01' & date <= '2021-12-31')
+```
+
+```{r}
+# Select a random date in each quarter
+set.seed(1)
+Q1_date = sample(unlist(unique(Q1['date'])),1)
+Q2_date = sample(unlist(unique(Q2['date'])),1)
+Q3_date = sample(unlist(unique(Q3['date'])),1)
+Q4_date = sample(unlist(unique(Q4['date'])),1)
+
+# Get time IDs in selected dates
+Q1_timeIDs = time_IDs |> filter(date == Q1_date) |> pull(time_id)
+Q2_timeIDs = time_IDs |> filter(date == Q2_date) |> pull(time_id)
+Q3_timeIDs = time_IDs |> filter(date == Q3_date) |> pull(time_id)
+Q4_timeIDs = time_IDs |> filter(date == Q4_date) |> pull(time_id)
+quarters = list(Q1_timeIDs, Q2_timeIDs, Q3_timeIDs, Q4_timeIDs)
+```
+
+## Feature engineering
+
+```{r}
+# Function to compute realised volatility
+comp_vol <- function(x) {
+    return(sqrt(sum(x ^ 2)))
+}
+# Function to compute realised quarticity
+comp_quar <- function(x) {
+    return(length(x) / 3 * sum(x ^ 4))
+}
+
+# Compute volatility and features for each quarter
+q = 1
+quarters.vol = quarters.features = quarters.quarticity = list()
+
+for(Q_timeIDs in quarters){
+  Q_feature = stock |> 
+  filter(stock_id == 8382 & time_id %in% Q_timeIDs) |> 
+  mutate(BidAskSpread = (ask_price1 / bid_price1) - 1,
+         WAP = (bid_price1*ask_size1 + ask_price1*bid_size1)/(bid_size1 + ask_size1),
+         num_order = bid_size1 + ask_size1 + bid_size2 + ask_size2,
+         volume_imbalance = abs((ask_size1 + ask_size2)-(bid_size1 + bid_size2)),
+         bid_spread = bid_price1 - bid_price2,
+         ask_spread = ask_price1 - ask_price2,
+         time_bucket = ceiling(seconds_in_bucket / 600),)
+
+  Q_target = target |> 
+    filter(stock_id == 8382 & time_id %in% Q_timeIDs) |> 
+    mutate(BidAskSpread = (ask_price1 / bid_price1) - 1,
+           WAP = (bid_price1*ask_size1 + ask_price1*bid_size1)/(bid_size1 + ask_size1),
+           num_order = bid_size1 + ask_size1 + bid_size2 + ask_size2,
+           volume_imbalance = abs((ask_size1 + ask_size2)-(bid_size1 + bid_size2)),
+           bid_spread = bid_price1 - bid_price2,
+           ask_spread = ask_price1 - ask_price2,
+           time_bucket = ceiling(seconds_in_bucket / 600))
+  
+  # Compute log-returns
+  log_r1 = list()
+  for (i in 1 : length(Q_timeIDs)) {
+    sec1 = Q_feature |> filter(time_id == Q_timeIDs[i]) |> pull(seconds_in_bucket)
+    price1 = Q_feature |> filter(time_id == Q_timeIDs[i]) |> pull(WAP)
+    
+    sec2 = Q_target |>  filter(time_id == Q_timeIDs[i]) |>  pull(seconds_in_bucket)
+    price2 = Q_target |>  filter(time_id == Q_timeIDs[i]) |> pull(WAP)
+    
+    sec = c(sec1, sec2)
+    price = c(price1, price2)
+    
+    log_r <- log(price[-1] / price[1:(length(price) - 1)])
+    log_r1[[i]] <- data.frame(time = sec[-1], log_return = log_r)
+    time.no.change <- (1:3599)[!(1:3599 %in% log_r1[[i]]$time)]
+    if (length(time.no.change) > 0) {
+      new.df <- data.frame(time = time.no.change, log_return = 0)
+      log_r1[[i]] <- rbind(log_r1[[i]], new.df)
+      log_r1[[i]] <- log_r1[[i]][order(log_r1[[i]]$time), ]
+    }
+  }
+
+  # Compute volatility
+  vol = list()
+  for (i in 1 : length(log_r1)) {
+    log_r1[[i]] <- log_r1[[i]] %>% mutate(time_bucket = ceiling(time / 600))
+    vol[[i]] <- aggregate(log_return ~ time_bucket, data = log_r1[[i]], FUN = comp_vol)
+    colnames(vol[[i]]) <- c('time_bucket', 'volatility')
+  }
+  quarters.vol[[q]] = do.call(rbind, vol)
+  
+  # Compute features
+  mean.price.df = var.price.df = mean.order.df = var.order.df = mean.BAS.df = var.BAS.df = 
+    mean.volIm.df = var.volIm.df = mean.bidSpread.df = var.bidSpread.df = 
+    mean.askSpread.df = var.askSpread.df = data.frame()
+  
+  for (i in 1 : length(vol)) {
+    stats.bucket1 = Q_feature %>% 
+      filter(time_id == Q_timeIDs[i] & time_bucket != 0) %>% 
+      select(c(BidAskSpread,WAP,num_order,volume_imbalance,bid_spread,ask_spread, time_bucket)) 
+    
+    stats.bucket2 = Q_target %>% 
+      filter(time_id == Q_timeIDs[i]) %>% 
+      select(c(BidAskSpread,WAP,num_order,volume_imbalance,bid_spread,ask_spread, time_bucket))
+    
+    stats.bucket = rbind(stats.bucket1, stats.bucket2)
+    
+    # For each 10-min time bucket, we compute the following statistics
+    mean.price <- aggregate(WAP ~ time_bucket, data = stats.bucket, FUN = mean)
+    var.price <- aggregate(WAP ~ time_bucket, data = stats.bucket, FUN = var)
+    mean.order <- aggregate(num_order ~ time_bucket, data = stats.bucket, FUN = mean)
+    var.order <- aggregate(num_order ~ time_bucket, data = stats.bucket, FUN = var)
+    mean.BAS <- aggregate(BidAskSpread ~ time_bucket, data = stats.bucket, FUN = mean)
+    var.BAS <- aggregate(BidAskSpread ~ time_bucket, data = stats.bucket, FUN = var)
+    mean.volIm <- aggregate(volume_imbalance ~ time_bucket, data = stats.bucket, FUN = mean)
+    var.volIm <- aggregate(volume_imbalance ~ time_bucket, data = stats.bucket, FUN = var)
+    mean.bidSpread <- aggregate(bid_spread ~ time_bucket, data = stats.bucket, FUN = mean)
+    var.bidSpread <- aggregate(bid_spread ~ time_bucket, data = stats.bucket, FUN = var)
+    mean.askSpread <- aggregate(ask_spread ~ time_bucket, data = stats.bucket, FUN = mean)
+    var.askSpread <- aggregate(ask_spread ~ time_bucket, data = stats.bucket, FUN = var)
+    
+    mean.price.df = rbind(mean.price.df, mean.price)
+    var.price.df = rbind(var.price.df, var.price)
+    mean.order.df = rbind(mean.order.df, mean.order)
+    var.order.df = rbind(var.order.df, var.order)
+    mean.BAS.df = rbind(mean.BAS.df, mean.BAS)
+    var.BAS.df = rbind(var.BAS.df, var.BAS)
+    mean.volIm.df = rbind(mean.volIm.df, mean.volIm)
+    var.volIm.df = rbind(var.volIm.df, var.volIm)
+    mean.bidSpread.df = rbind(mean.bidSpread.df, mean.bidSpread)
+    var.bidSpread.df = rbind(var.bidSpread.df, var.bidSpread)
+    mean.askSpread.df = rbind(mean.askSpread.df, mean.askSpread)
+    var.askSpread.df = rbind(var.askSpread.df, var.askSpread)
+  }
+  quarters.features[[q]] = data.frame(time_bucket = mean.price.df$time_bucket,
+                                       mean_price = mean.price.df$WAP,
+                                       var_price = var.price.df$WAP,
+                                       mean_order = mean.order.df$num_order,
+                                       var_order = var.order.df$num_order,
+                                       mean_BAS = mean.BAS.df$BidAskSpread,
+                                       var_BAS = var.BAS.df$BidAskSpread,
+                                       mean_volIm = mean.volIm.df$volume_imbalance, 
+                                       var_volIm = var.volIm.df$volume_imbalance,
+                                       mean_bidSpread = mean.bidSpread.df$bid_spread, 
+                                       var_bidSpread = var.bidSpread.df$bid_spread,
+                                       mean_askSpread = mean.askSpread.df$ask_spread, 
+                                       var_askSpread = var.askSpread.df$ask_spread)
+  
+  # Compute quarticity 
+  quar = list()
+  for (i in 1 : length(log_r1)) {
+    quar[[i]] <- aggregate(log_return ~ time_bucket, data = log_r1[[i]], FUN = comp_quar)
+    colnames(quar[[i]]) <- c('time_bucket', 'quarticity')
+  }
+  quarters.quarticity[[q]] = do.call(rbind, quar)
+  
+  q = q+1
+}
+```
+
+### Backward selection
+
+We perform backward selection on each quarter, and select features that are consistently significant across the four quarters.
+
+```{r}
+reg = quarters.features[[1]][1:35,]
+reg$volatility = quarters.vol[[1]][2:36,2]
+lm1 = lm(volatility ~ ., reg, weights = 0.8 ^ ((35 - 1):0))
+step.back.aic = step(lm1, direction="backward", trace=FALSE)
+summary(step.back.aic)
+```
+
+```{r}
+reg = quarters.features[[2]][1:35,]
+reg$volatility = quarters.vol[[2]][2:36,2]
+lm1 = lm(volatility ~ ., reg, weights = 0.8 ^ ((35 - 1):0))
+step.back.aic = step(lm1, direction="backward", trace=FALSE)
+summary(step.back.aic)
+```
+
+```{r}
+reg = quarters.features[[3]][1:35,]
+reg$volatility = quarters.vol[[3]][2:36,2]
+lm1 = lm(volatility ~ ., reg, weights = 0.8 ^ ((35 - 1):0))
+step.back.aic = step(lm1, direction="backward", trace=FALSE)
+summary(step.back.aic)
+```
+
+```{r}
+reg = quarters.features[[4]][1:35,]
+reg$volatility = quarters.vol[[4]][2:36,2]
+lm1 = lm(volatility ~ ., reg, weights = 0.8 ^ ((35 - 1):0))
+step.back.aic = step(lm1, direction="backward", trace=FALSE)
+summary(step.back.aic)
+```
+
+## Rolling window forecasting
+
+### Linear regression
+
+```{r}
+fit_lm = function(Q_vol, Q_features){
+  # Rolling window
+  window_size = 12 # 2 hours = 12 buckets of 10-min
+  window_lb = 2 # start from 2nd time bucket
+  increment = 1 # increment by 10 minutes each time
+  max_index = nrow(Q_vol)
+  i = 1
+  
+  lm.models = pred.lm = list()
+  r.squared.lm = MSE.lm = QLIKE.lm = MAE.lm = RMSPE.lm = vector()
+  
+  while(max_index > window_lb + window_size - 1){
+    window_ub = window_lb + (window_size - 1)
+    # Use 2-hour data to train model (12 10-min time buckets)
+    Q.vol.train = Q_vol[window_lb:window_ub,]
+    # Actual volatility of the next 10 minutes (next time bucket)
+    Q.vol.val = Q_vol[window_ub + 1,]
+    
+    idx = (window_lb - 1):(window_ub - 1)
+    reg = Q_features[idx,]
+    reg$volatility = Q.vol.train$volatility
+
+    reg.val = Q_features[window_ub,]
+    reg.val$volatility = Q.vol.val$volatility
+    
+    # Fit model and predict
+    lm.models[[i]]=lm(volatility ~ mean_BAS + var_order + var_BAS + var_volIm + var_bidSpread,
+                      reg, weights = 0.8 ^ ((window_size - 1):0))
+    r.squared.lm = c(r.squared.lm, summary(lm.models[[i]])$r.squared)
+    pred.lm[[i]] = predict(lm.models[[i]], newdata = reg.val)
+    
+    # Accuracy measures
+    MSE.lm = c(MSE.lm, mean((Q.vol.val$volatility - pred.lm[[i]]) ^ 2))
+    QLIKE.lm = c(QLIKE.lm, mean(Q.vol.val$volatility / pred.lm[[i]] - 
+                                   log(Q.vol.val$volatility / pred.lm[[i]]) - 1))
+    MAE.lm = c(MAE.lm, abs(Q.vol.val$volatility - pred.lm[[i]]))
+    RMSPE.lm = c(RMSPE.lm, mean(((Q.vol.val$volatility - pred.lm[[i]])/Q.vol.val$volatility)^2))
+    # Increment window
+    window_lb = window_lb + increment
+    i = i + 1
+  }
+  return(list(lm.models, r.squared.lm, pred.lm, MSE.lm, QLIKE.lm, MAE.lm, RMSPE.lm))
+}
+```
+
+```{r, warning=FALSE}
+quarters.lm.models = quarters.pred.lm = list()
+quarters.r.squared.lm = quarters.MSE.lm = quarters.QLIKE.lm = 
+  quarters.MAE.lm = quarters.RMSPE.lm = vector()
+
+for(q in 1:length(quarters)){
+  # Fit linear models using rolling window
+  result = fit_lm(quarters.vol[[q]], quarters.features[[q]])
+  # Save results
+  quarters.lm.models[[q]] = result[[1]]
+  quarters.pred.lm[[q]] = result[[3]]
+  quarters.r.squared.lm = c(quarters.r.squared.lm, result[[2]])
+  quarters.MSE.lm = c(quarters.MSE.lm, result[[4]])
+  quarters.QLIKE.lm = c(quarters.QLIKE.lm, result[[5]])
+  quarters.MAE.lm =  c(quarters.MAE.lm, result[[6]])
+  quarters.RMSPE.lm = c(quarters.RMSPE.lm, result[[7]])
+}
+```
+
+### HAV-WLS
+
+```{r}
+fit_HAV = function(Q_vol, Q_quar){
+  # Rolling window
+  window_size = 12 # 2 hours = 12 buckets of 10-min
+  window_lb = 1 
+  increment = 1 # increment by 10 minutes each time
+  max_index = nrow(Q_vol)
+  i = 1
+  
+  HAV.wls.models = pred.HAV = list()
+  r.squared.HAV = MSE.HAV = QLIKE.HAV = MAE.HAV = RMSPE.HAV = vector()
+  
+  while(max_index > window_lb + window_size - 1){
+    window_ub = window_lb + (window_size - 1)
+    # Use 2-hour data to train model (12 10-min time buckets)
+    Q.vol.train = Q_vol[window_lb:window_ub,]
+    # Actual volatility of the next 10 minutes (next time bucket)
+    Q.vol.val = Q_vol[window_ub + 1,]
+    # Realised quarticity 
+    quar.train = Q_quar[window_lb:window_ub,]
+    
+    # Compute 5-day average volatility 
+    mean.vol <- rep(0, window_size - 5)
+    for (j in 1 : 5) {
+      mean.vol <- mean.vol + Q.vol.train$volatility[j : (j + window_size - 6)] / 5
+    }
+    
+    # Create dataframe for training & test sets
+    HAV.df <- data.frame(vol = Q.vol.train$volatility[-(1:5)], 
+                          vol_1 = Q.vol.train$volatility[5:(window_size - 1)],
+                          mean_vol_5 = mean.vol)
+    HAV.val <- data.frame(vol_1 = Q.vol.train$volatility[window_size],
+                          mean_vol_5 = mean(Q.vol.train$volatility[(window_size-4): window_size]))
+    
+    # Fit model and predict
+    HAV.wls.models[[i]] <- lm(vol ~ vol_1 + mean_vol_5, HAV.df,
+                              weights = HAV.df$vol_1 / 
+                                sqrt(quar.train$quarticity[5:(window_size - 1)]))
+    r.squared.HAV = c(r.squared.HAV, summary(HAV.wls.models[[i]])$r.squared)
+    pred.HAV[[i]] = predict(HAV.wls.models[[i]], newdata = HAV.val)
+    
+    # Accuracy measures
+    MSE.HAV= c(MSE.HAV, mean((Q.vol.val$volatility - pred.HAV[[i]]) ^ 2))
+    QLIKE.HAV = c(QLIKE.HAV, mean(Q.vol.val$volatility / pred.HAV[[i]] - 
+                                   log(Q.vol.val$volatility / pred.HAV[[i]]) - 1))
+    MAE.HAV= c(MAE.HAV, abs(Q.vol.val$volatility - pred.HAV[[i]]))
+    RMSPE.HAV = c(RMSPE.HAV, mean(((Q.vol.val$volatility - pred.HAV[[i]])/
+                                     Q.vol.val$volatility)^2))
+    # Increment window
+    window_lb = window_lb + increment
+    i = i + 1
+  }
+  
+  return(list(HAV.wls.models, r.squared.HAV, pred.HAV, MSE.HAV, QLIKE.HAV, MAE.HAV, RMSPE.HAV))
+}
+```
+
+```{r}
+quarters.HAV.models = quarters.pred.HAV = list()
+quarters.r.squared.HAV = quarters.MSE.HAV = quarters.QLIKE.HAV = 
+  quarters.MAE.HAV = quarters.RMSPE.HAV = vector()
+
+for(q in 1:length(quarters)){
+  # Fit HAV model using rolling window
+  results = fit_HAV(quarters.vol[[q]], quarters.quarticity[[q]])
+  # Save results
+  quarters.HAV.models[[q]] = results[[1]]
+  quarters.pred.HAV[[q]] = results[[3]]
+  quarters.r.squared.HAV = c(quarters.r.squared.HAV, results[[2]])
+  quarters.MSE.HAV = c(quarters.MSE.HAV, results[[4]])
+  quarters.QLIKE.HAV = c(quarters.QLIKE.HAV, results[[5]])
+  quarters.MAE.HAV =  c(quarters.MAE.HAV, results[[6]])
+  quarters.RMSPE.HAV = c(quarters.RMSPE.HAV, results[[7]])
+}
+```
+
+### Random forest
+
+```{r}
+fit_rf = function(Q_vol, Q_features){
+  set.seed(16)
+  
+  # Rolling window
+  window_size = 12 # 2 hours = 12 buckets of 10-min
+  window_lb = 2 # start from 2nd time bucket
+  increment = 1 # increment by 10 minutes each time
+  max_index = nrow(Q_vol)
+  i = 1
+  
+  rf.models = pred.rf = list()
+  MSE.rf = QLIKE.rf = MAE.rf = RMSPE.rf = vector()
+  
+  while(max_index > window_lb + window_size - 1){
+    window_ub = window_lb + (window_size - 1)
+    # Use 2-hour data to train model (12 10-min time buckets)
+    Q.vol.train = Q_vol[window_lb:window_ub,]
+    # Actual volatility of the next 10 minutes (next time bucket)
+    Q.vol.val = Q_vol[window_ub + 1,]
+    
+    idx = (window_lb - 1):(window_ub - 1)
+    reg = Q_features[idx,]
+    reg$volatility = Q.vol.train$volatility
+
+    reg.val = Q_features[window_ub,]
+    reg.val$volatility = Q.vol.val$volatility
+    
+    # Fit model and predict
+    rf.models[[i]] = randomForest(volatility ~ mean_BAS + var_BAS + var_order 
+                                  + var_volIm + var_bidSpread,
+                                   reg, weights = 0.8 ^ ((window_size - 1):0))
+    pred.rf[[i]] = predict(rf.models[[i]], newdata = reg.val)
+    
+    # Compute accuracy measures
+    MSE.rf = c(MSE.rf, mean((Q.vol.val$volatility - pred.rf[[i]]) ^ 2))
+    QLIKE.rf = c(QLIKE.rf, mean(Q.vol.val$volatility / pred.rf[[i]] - 
+                                   log(Q.vol.val$volatility / pred.rf[[i]]) - 1))
+    MAE.rf= c(MAE.rf, abs(Q.vol.val$volatility - pred.rf[[i]]))
+    RMSPE.rf = c(RMSPE.rf, mean(((Q.vol.val$volatility - pred.rf[[i]])/Q.vol.val$volatility)^2))
+    # Increment window
+    window_lb <- window_lb + increment
+    i <- i + 1
+  }
+  return(list(rf.models, pred.rf, MSE.rf, QLIKE.rf, MAE.rf, RMSPE.rf))
+}
+```
+
+```{r}
+quarters.rf.models = quarters.pred.rf = list()
+quarters.MSE.rf = quarters.QLIKE.rf = quarters.MAE.rf = quarters.RMSPE.rf = vector()
+
+for(q in 1:length(quarters)){
+  # Fit random forest & predict using rolling window
+  result = fit_rf(quarters.vol[[q]], quarters.features[[q]])
+  # Save results
+  quarters.rf.models[[q]] = result[[1]]
+  quarters.pred.rf[[q]] = result[[2]]
+  quarters.MSE.rf = c(quarters.MSE.rf, result[[3]])
+  quarters.QLIKE.rf = c(quarters.QLIKE.rf, result[[4]])
+  quarters.MAE.rf =  c(quarters.MAE.rf, result[[5]])
+  quarters.RMSPE.rf = c(quarters.RMSPE.rf, result[[6]])
+}
+```
+
+### SVM
+
+```{r}
+fit_SVM = function(Q_vol, Q_features){
+  # Rolling window setup
+  window_size <- 12  # 2 hours = 12 buckets of 10-min each
+  window_lb <- 2     # Start from the second time bucket
+  increment <- 1     # Increment by 10 minutes each time
+  max_index <- nrow(Q_vol)
+  i <- 1
+  svm.models = pred.svm = list()
+  MSE.svm = QLIKE.svm = MAE.svm = RMSPE.svm = vector()
+  
+  while (max_index > window_lb + window_size - 1) {
+    window_ub <- window_lb + (window_size - 1)
+    # Use 2-hour data to train the model (12 10-min time buckets)
+    Q.vol.train <- Q_vol[window_lb:window_ub, ]
+    # Actual volatility of the next 10 minutes (next time bucket)
+    Q.vol.val <- Q_vol[window_ub + 1, ]
+    
+    idx = (window_lb - 1):(window_ub - 1)
+    reg = Q_features[idx,]
+    reg$volatility = Q.vol.train$volatility
+
+    reg.val = Q_features[window_ub,]
+    reg.val$volatility = Q.vol.val$volatility
+    
+    # Train SVM model
+    svm.models[[i]] <- svm(
+      volatility ~ mean_BAS + var_BAS + var_order + var_volIm + var_bidSpread, 
+      data = reg,
+      kernel = "radial",  
+      cost = 1            
+    )
+    # Predict the next value using the SVM model
+    pred.svm[[i]] <- predict(svm.models[[i]], newdata = reg.val)
+    
+    # Calculate accuracy measures
+    MSE.svm <- c(MSE.svm, mean((Q.vol.val$volatility - pred.svm[[i]]) ^ 2))
+    QLIKE.svm <- c(QLIKE.svm, mean(Q.vol.val$volatility / pred.svm[[i]] - 
+                                  log(Q.vol.val$volatility / pred.svm[[i]]) - 1))
+    MAE.svm = c(MAE.svm, abs(Q.vol.val$volatility - pred.svm[[i]]))
+    RMSPE.svm = c(RMSPE.svm, mean(((Q.vol.val$volatility - pred.svm[[i]])/
+                                     Q.vol.val$volatility)^2))
+    # Increment the window
+    window_lb <- window_lb + increment
+    i = i + 1
+  }
+  return(list(svm.models, pred.svm, MSE.svm, QLIKE.svm, MAE.svm, RMSPE.svm))
+}
+```
+
+```{r}
+# Initialize variables to store results
+quarters.svm.models = quarters.pred.svm = list()  # Store all quarter SVM models
+quarters.MSE.svm = quarters.QLIKE.svm = quarters.MAE.svm = quarters.RMSPE.svm = vector() 
+
+# Loop through each group of quarters (replace `quarters` with your list of time ID groupings)
+for (q in 1:length(quarters)) {
+  # Fit SVM & predict using rolling window
+  results = fit_SVM(quarters.vol[[q]], quarters.features[[q]])
+  # Save results
+  quarters.svm.models[[q]] = results[[1]]
+  quarters.pred.svm[[q]] = results[[2]]
+  quarters.MSE.svm =  c(quarters.MSE.svm, results[[3]])
+  quarters.QLIKE.svm = c(quarters.QLIKE.svm, results[[4]])
+  quarters.MAE.svm =  c(quarters.MAE.svm, results[[5]])
+  quarters.RMSPE.svm = c(quarters.RMSPE.svm, results[[6]])
+}
+```
+
+## Accuracy
+
+### Linear Regression
+
+```{r}
+boxplot(quarters.r.squared.lm, horizontal = TRUE, main='Distribution of R2')
+boxplot(quarters.MSE.lm, horizontal = TRUE, main='Distribution of MSE')
+boxplot(quarters.QLIKE.lm, horizontal = TRUE, main='Distribution of QLIKE')
+boxplot(quarters.MAE.lm, horizontal = TRUE, main='Distribution of MAE')
+boxplot(quarters.RMSPE.lm, horizontal = TRUE, main='Distribution of RMSPE')
+
+acc.lm = data.frame(MSE = quarters.MSE.lm,
+                    QLIKE = quarters.QLIKE.lm,
+                    MAE = quarters.MAE.lm,
+                    RMSPE = quarters.RMSPE.lm)
+save(acc.lm, file='../data/lm_acc.RDS')
+```
+
+### HAV-WLS
+
+```{r}
+boxplot(quarters.r.squared.HAV, horizontal = TRUE, main='Distribution of R2')
+boxplot(quarters.MSE.HAV , horizontal = TRUE, main='Distribution of MSE')
+boxplot(quarters.QLIKE.HAV, horizontal = TRUE, main='Distribution of QLIKE')
+boxplot(quarters.MAE.HAV, horizontal = TRUE, main='Distribution of MAE')
+boxplot(quarters.RMSPE.HAV, horizontal = TRUE, main='Distribution of RMSPE')
+
+acc.HAV = data.frame(MSE = quarters.MSE.HAV,
+                    QLIKE = quarters.QLIKE.HAV,
+                    MAE = quarters.MAE.HAV,
+                    RMSPE = quarters.RMSPE.HAV)
+save(acc.HAV, file='../data/HAV_acc.RDS')
+```
+
+### Random forest
+
+```{r}
+boxplot(quarters.MSE.rf , horizontal = TRUE, main='Distribution of MSE')
+boxplot(quarters.QLIKE.rf , horizontal = TRUE, main='Distribution of QLIKE')
+boxplot(quarters.MAE.rf , horizontal = TRUE, main='Distribution of MAE')
+boxplot(quarters.RMSPE.rf , horizontal = TRUE, main='Distribution of RMSPE')
+
+acc.rf = data.frame(MSE = quarters.MSE.rf,
+                    QLIKE = quarters.QLIKE.rf,
+                    MAE = quarters.MAE.rf,
+                    RMSPE = quarters.RMSPE.rf)
+save(acc.rf, file='../data/rf_acc.RDS')
+```
+
+### SVM
+
+```{r}
+boxplot(quarters.MSE.svm , horizontal = TRUE, main='Distribution of MSE')
+boxplot(quarters.QLIKE.svm , horizontal = TRUE, main='Distribution of QLIKE')
+boxplot(quarters.MAE.svm , horizontal = TRUE, main='Distribution of MAE')
+boxplot(quarters.RMSPE.svm , horizontal = TRUE, main='Distribution of RMSPE')
+
+acc.svm = data.frame(MSE = quarters.MSE.svm,
+                    QLIKE = quarters.QLIKE.svm,
+                    MAE = quarters.MAE.svm,
+                    RMSPE = quarters.RMSPE.svm)
+save(acc.svm, file='../data/svm_acc.RDS')
+```
+
+### Summary
+
+```{r}
+# Median prediction errors
+median_acc = data.frame(colMedians(acc.lm, na.rm=TRUE),
+                        colMedians(acc.HAV, na.rm=TRUE),
+                        colMedians(acc.rf, na.rm=TRUE),
+                        colMedians(acc.svm, na.rm=TRUE))
+colnames(median_acc) = c('LR', 'HAV', 'RF', 'SVM')
+median_acc
+```
+
+```{r}
+# Accuracy ranking
+acc_rank = apply(median_acc, 1, function(x) rank(x, ties.method = "min"))
+acc_rank = as.data.frame(t(acc_rank))
+acc_rank
+```
+
+```{r}
+# Compute accuracy score
+error_normalised = as.data.frame(lapply(median_acc, 
+                                        function(x) x/rowSums(median_acc)))
+acc_score = as.data.frame(t(1/colMeans(error_normalised)))
+colnames(acc_score) = c('Linear Regression', 'HAV-WLS', 
+                         'Random Forest', 'Support Vector Machine')
+acc_score
+```
+
+## Robustness
+
+```{r, warning=FALSE}
+# Function to replace a percentage of volatility values with random values
+replace_data <- function(data, percentage, lower = 0.004, upper = 0.008) {
+  set.seed(2024)
+  n_replace <- floor(nrow(data) * percentage)  # Number of elements to replace
+  idx <- sample(nrow(data), size = n_replace, replace = FALSE)
+  
+  # Replace the data at those indices with random values between lower and upper
+  df = data
+  for (i in 1:length(idx)) {
+    df[idx[i], 2] <- runif(1, min = lower, max = upper)
+  }
+  return(df)
+}
+
+# Function to fit models on contaminated data and make predictions
+volatility_prediction_with_random_replacement <- function(percentage, model) {
+  replaced_pred = list()
+  for (i in 1:length(quarters)){
+    replaced_vol = replace_data(quarters.vol[[i]], percentage)
+    if(model == 'lm'){
+      pred = fit_lm(replaced_vol, quarters.features[[i]])[[3]]
+    } else if(model == 'hav'){
+      pred = fit_HAV(replaced_vol, quarters.quarticity[[i]])[[3]]
+    } else if(model == 'rf'){
+      pred = fit_rf(replaced_vol, quarters.features[[i]])[[2]]
+    } else if(model == 'svm'){
+      pred = fit_SVM(replaced_vol, quarters.features[[i]])[[2]]
+    }
+    replaced_pred[[i]] = pred
+  }
+  return(replaced_pred)
+}
+
+# Function to calculate the area between two lines using the trapezoidal rule
+calculate_area <- function(line1, line2) {
+  abs_diff <- abs(line1 - line2)
+  area <- trapz(abs_diff) 
+  return(area)
+}
+```
+
+```{r, warning=FALSE}
+models = c('lm', 'hav', 'rf', 'svm')
+models.pred = list(quarters.pred.lm, quarters.pred.HAV, quarters.pred.rf, quarters.pred.svm)
+robust.lists = robust.plots = robust.df = robust.areas = list()
+for(i in 1:length(models)){
+  train_5_pred = volatility_prediction_with_random_replacement(0.05, models[i])
+  train_10_pred = volatility_prediction_with_random_replacement(0.10, models[i])
+  train_15_pred = volatility_prediction_with_random_replacement(0.15, models[i])
+  quarters.pred = models.pred[[i]]
+  # Averaging the 4 different predictions of the quarters
+  train_5_pred <- mapply(mean, train_5_pred[[1]], train_5_pred[[2]], 
+                        train_5_pred[[3]], train_5_pred[[4]], na.rm = TRUE)
+  train_10_pred <- mapply(mean, train_10_pred[[1]], train_10_pred[[2]], 
+                          train_10_pred[[3]], train_10_pred[[4]], na.rm = TRUE)
+  train_15_pred <- mapply(mean, train_15_pred[[1]], train_15_pred[[2]], 
+                          train_15_pred[[3]], train_15_pred[[4]], na.rm = TRUE)
+  train_0_pred <- mapply(mean, quarters.pred[[1]], quarters.pred[[2]], 
+                      quarters.pred[[3]], quarters.pred[[4]], na.rm = TRUE)
+  # Create dataframe for shiny
+  robust.df[[i]] = data.frame(time = 1:length(train_0_pred), pred = train_0_pred, 
+                              train_5 = train_5_pred, train_10 = train_10_pred, 
+                              train_15 = train_15_pred)
+  
+  df = lapply(list(pred = train_0_pred, train_5 = train_5_pred, 
+                    train_10 = train_10_pred, train_15 = train_15_pred), 
+               function(x) data.frame(Time = 1:length(x), Volatility = unlist(x)))
+  combined.df = do.call(rbind, lapply(names(df), 
+                                    function(x) {cbind(df[[x]], Condition = x)}))
+  combined.df$Condition = factor(combined.df$Condition, 
+                                 levels=c('pred', 'train_5', 'train_10', 'train_15'))
+  
+  # Visualise adversarial areas
+  robust.plots[[i]] = ggplot(combined.df, 
+                             aes(x = Time, y = Volatility, colour = Condition)) +
+                     geom_line() +
+                     geom_point(size = 1, alpha = 0.6) +
+                     labs(
+                      title = "Predicted Volatility using Contaminated Training Data",
+                      x = "Time (index)",
+                      y = "Predicted Volatility",
+                      colour = "Condition") +
+                    theme_minimal() 
+  
+  # Extracting the relevant data from the combined data frame
+  true_pred <- combined.df$Volatility[combined.df$Condition == 'pred']
+  train_5 <-  combined.df$Volatility[combined.df$Condition == 'train_5']
+  train_10 <- combined.df$Volatility[combined.df$Condition == 'train_10']
+  train_15 <- combined.df$Volatility[combined.df$Condition == 'train_15']
+  # Calculating the areas
+  area.train_5 <- calculate_area(true_pred, train_5)
+  area.train_10 <- calculate_area(true_pred, train_10)
+  area.train_15 <- calculate_area(true_pred, train_15)
+  # Tabulating the results
+  robust.areas[[i]] = data.frame(
+    `Comparison` = c("0% vs 5%", "0% vs 10%", "0% vs 15%"),
+    `Area` = c(area.train_5, area.train_10, area.train_15)
+  )
+}
+```
+
+```{r}
+#Save data
+save(robust.df, file='../data/robust_vol.RDS')
+save(robust.areas, file = '../data/robust_area.RDS')
+```
+
+### Linear regression
+
+```{r}
+robust.plots[[1]]
+robust.areas[[1]]
+```
+
+### HAV
+
+```{r}
+robust.plots[[2]]
+robust.areas[[2]]
+```
+
+### Random forest
+
+```{r}
+robust.plots[[3]]
+robust.areas[[3]]
+```
+
+### SVM
+
+```{r}
+robust.plots[[4]]
+robust.areas[[4]]
+```
+
+### Summary
+
+```{r}
+names(robust.areas[[1]]) <- c("Comparison", "Area LR")
+names(robust.areas[[2]]) <- c("Comparison", "Area HAV")
+names(robust.areas[[3]]) <- c("Comparison", "Area RF")
+names(robust.areas[[4]]) <- c("Comparison", "Area SVM")
+combined_area <- Reduce(function(x, y) merge(x, y, by = "Comparison", all = TRUE), robust.areas)
+comparison_order <- factor(combined_area$Comparison, levels = c("0% vs 5%", "0% vs 10%", "0% vs 15%"))
+combined_area <- combined_area[order(comparison_order), ]
+combined_area
+save(combined_area, file='../data/robust_area.Rds')
+```
+
+```{r}
+# Robustness ranking
+combined_area$rank_LR <- apply(combined_area[, -1], 1, function(x) rank(x, ties.method = "min")[1])
+combined_area$rank_HAV <- apply(combined_area[, -1], 1, function(x) rank(x, ties.method = "min")[2])
+combined_area$rank_RF <- apply(combined_area[, -1], 1, function(x) rank(x, ties.method = "min")[3])
+combined_area$rank_SVM <- apply(combined_area[, -1], 1, function(x) rank(x, ties.method = "min")[4])
+area_ranking_table <- combined_area[, c("Comparison", "rank_LR", "rank_HAV", "rank_RF", "rank_SVM")]
+comparison_order <- factor(area_ranking_table$Comparison, levels = c("0% vs 5%", "0% vs 10%", "0% vs 15%"))
+area_ranking_table <- area_ranking_table[order(comparison_order), ]
+colnames(area_ranking_table) = c("Comparison", "Rank LR", "Rank HAV", "Rank RF", "Rank SVM")
+area_ranking_table
+
+save(area_ranking_table, file='../data/area_ranking.RDS')
+```
+
+```{r}
+# Robustness scores
+data_to_normalise = combined_area[, 2:5]
+combined_area_normalised = as.data.frame(lapply(data_to_normalise, 
+                                                function(x) x / rowSums(data_to_normalise)))
+robustness.scores_per_area = colSums(combined_area_normalised)
+robust_score = as.data.frame(t(1/robustness.scores_per_area))
+colnames(robust_score) = c('LR', 'HAV', 'RF', 'SVM')
+robust_score
+```
+
+## Interpretability
+
+```{r}
+survey = read.csv("../data/cleaned_survey.csv")
+survey
+```
+
+```{r, message=FALSE}
+cleaned_survey = survey
+
+# Process survey data for visualisation
+survey$Q1[survey$Q1 == 'Zero/minimal (No/very little exposure to financial concepts/terminology)'] <- 'Zero/minimal'
+survey$Q1[survey$Q1 == 'Intermediate proficiency (Some understanding of financial concepts/terminology)'] <- 'Intermediate'
+survey$Q1[survey$Q1 == 'Advanced (Fluency in financial concepts/terminology)'] <- 'Advanced'
+
+survey$Q2[survey$Q2 == 'Zero/minimal (No/very little exposure to machine learning concepts/terminology)'] <- 'Zero/minimal'
+survey$Q2[survey$Q2 == 'Intermediate proficiency (Some understanding of machine learning concepts/terminology)'] <- 'Intermediate'
+survey$Q2[survey$Q2 == 'Advanced (Fluency in machine learning concepts/terminology)'] <- 'Advanced'
+
+survey$Q3[survey$Q3== 0] <- "No understanding"
+survey$Q3[survey$Q3== 0.25] <- "Limited understanding"
+survey$Q3[survey$Q3== 0.5] <- "Basic understanding"
+survey$Q3[survey$Q3== 0.75] <- "Good understanding"
+survey$Q3[survey$Q3== 1] <- "Strong understanding"
+survey$Q3 = factor(survey$Q3, levels=c('No understanding', 'Limited understanding', 'Basic understanding', 'Good understanding', 'Strong understanding'))
+
+survey$Q6[survey$Q6== 0] <- "No understanding"
+survey$Q6[survey$Q6== 0.25] <- "Limited understanding"
+survey$Q6[survey$Q6== 0.5] <- "Basic understanding"
+survey$Q6[survey$Q6== 0.75] <- "Good understanding"
+survey$Q6[survey$Q6== 1] <- "Strong understanding"
+survey$Q6 = factor(survey$Q6, levels=c('No understanding', 'Limited understanding', 'Basic understanding', 'Good understanding', 'Strong understanding'))
+
+survey$Q9[survey$Q9== 0] <- "No understanding"
+survey$Q9[survey$Q9== 0.25] <- "Limited understanding"
+survey$Q9[survey$Q9== 0.5] <- "Basic understanding"
+survey$Q9[survey$Q9== 0.75] <- "Good understanding"
+survey$Q9[survey$Q9== 1] <- "Strong understanding"
+survey$Q9 = factor(survey$Q9, levels=c('No understanding', 'Limited understanding', 'Basic understanding', 'Good understanding', 'Strong understanding'))
+
+survey$Q14[survey$Q14== 0] <- "No understanding"
+survey$Q14[survey$Q14== 0.25] <- "Limited understanding"
+survey$Q14[survey$Q14== 0.5] <- "Basic understanding"
+survey$Q14[survey$Q14== 0.75] <- "Good understanding"
+survey$Q14[survey$Q14== 1] <- "Strong understanding"
+survey$Q14 = factor(survey$Q14, levels=c('No understanding', 'Limited understanding', 'Basic understanding', 'Good understanding', 'Strong understanding'))
+
+survey$LinearTest = factor(survey$LinearTest, levels=c(0, 1, 2))
+survey$HAVTest = factor(survey$HAVTest, levels=c(0, 1, 2))
+survey$RFTest = factor(survey$RFTest, levels=c(0, 1, 2))
+survey$SVMTest = factor(survey$SVMTest, levels=c(0, 1))
+
+save(survey, file='../data/survey.RData')
+```
+
+```{r, message=FALSE}
+# Visualisation of survey results
+p1 = survey |>
+    group_by(Q3, Q2) |> 
+    summarise(count = n()) |> 
+    ungroup() |> 
+    ggplot(aes(x=Q3, y=count, fill=Q2)) +
+      geom_bar(stat="identity", position = 'stack', alpha = 0.75) + 
+      labs(x='Understanding Confidence', y='Count', fill='Machine learning proficiency') + 
+      theme(legend.position = "bottom")
+p1
+
+p2 = survey |>
+    group_by(Q3, Q1) |> 
+    summarise(count = n()) |> 
+    ungroup() |> 
+    ggplot(aes(x=Q3, y=count, fill=Q1)) +
+      geom_bar(stat="identity", position = 'stack', alpha = 0.75) + 
+      labs(x='Understanding Confidence', y='Count', fill='Finance proficiency') +
+      theme(legend.position = "bottom")
+p2
+
+p3 = survey |>
+    group_by(LinearTest, Q1) |> 
+    summarise(count = n()) |> 
+    ungroup() |> 
+    ggplot(aes(x=LinearTest, y=count, fill=Q1)) +
+      geom_bar(stat="identity", position = 'stack', alpha = 0.75) + 
+      labs(x='Number of correct answers', y='Count', fill='Finance proficiency')+
+      theme(legend.position = "bottom")
+p3
+
+p4 = survey |>
+    group_by(LinearTest, Q2) |> 
+    summarise(count = n()) |> 
+    ungroup() |> 
+    ggplot(aes(x=LinearTest, y=count, fill=Q2)) +
+      geom_bar(stat="identity", position = 'stack', alpha = 0.75) + 
+      labs(x='Number of correct answers', y='Count', fill='Machine learning proficiency') +
+      theme(legend.position = "bottom")
+p4
+```
+
+```{r}
+technical <- cleaned_survey |> filter(
+  Q1 == "Intermediate proficiency (Some understanding of financial concepts/terminology)" |
+    Q1 == "Advanced (Fluency in financial concepts/terminology)")
+
+general <- cleaned_survey |> filter(
+  Q1 == "Zero/minimal (No/very little exposure to financial concepts/terminology)")
+
+# Obtain interpretability scores for 2 stakeholder groups
+inter_score = data.frame(c('Technical', 'General'),
+                         c(mean(technical$LinearTechnical), mean(general$LinearGeneral)),
+                         c(mean(technical$HAVTechnical), mean(general$HAVGeneral)),
+                         c(mean(technical$RFTechnical), mean(general$RFGeneral)),
+                         c(mean(technical$SVMTechnical), mean(general$SVMGeneral)))
+
+colnames(inter_score) = c('Stakeholder', 'Linear Regression', 'HAV-WLS', 
+                          'Random Forest', 'Support Vector Machine')
+inter_score
+save(inter_score, file = '../data/inter_score.RData')
+```
+
+## Model selection
+
+```{r}
+acc_score = as.numeric(acc_score)
+robust_score = as.numeric(robust_score)
+tech_inter_score = as.numeric(inter_score[1,2:5])
+general_inter_score = as.numeric(inter_score[2,2:5])
+
+# Min-max normalisation of performance metric scores
+norm_acc_score = (acc_score - min(acc_score))/(max(acc_score)-min(acc_score))
+norm_robust_score = (robust_score - min(robust_score))/
+                        (max(robust_score)-min(robust_score))
+norm_tech_inter_score = (tech_inter_score - min(tech_inter_score))/
+                        (max(tech_inter_score)- min(tech_inter_score))
+norm_general_inter_score = (general_inter_score - min(general_inter_score))/
+                        (max(general_inter_score)- min(general_inter_score))
+```
+
+```{r}
+# Summary of normalised scores of performance metrics
+eval = data.frame('Model' = c('LR', 'HAV', 'RF', 'SVM'),
+                  'Accuracy' = norm_acc_score,
+                  'Robustness' = norm_robust_score,
+                  'Technical Interpretability' = norm_tech_inter_score,
+                  'General Interpretability' = norm_general_inter_score)
+eval
+```
+
+```{r}
+# Plot performance metrics against each other
+ggplot(eval, aes(x=Accuracy, y=Robustness, color=Model)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(x='Interpretability', y ='Accuracy')
+```
+
+```{r}
+# Compute weighted average score
+## Technical - accuracy > robustness > interpretability
+tech_model_score = 0.5*norm_acc_score + 0.3*norm_robust_score + 0.2*norm_tech_inter_score
+tech_model_score
+## General - interpretability > accuracy > robustness
+general_model_score = 0.25*norm_acc_score + 0.1*norm_robust_score + 0.65*norm_general_inter_score
+general_model_score
+```

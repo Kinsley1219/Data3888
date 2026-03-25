@@ -1,0 +1,161 @@
+---
+title: "Survey Results"
+author: "Katie Yau"
+format: html
+editor: visual
+---
+
+```{r, message=FALSE}
+library(dplyr)
+```
+
+## Importing Data
+
+```{r}
+survey <- read.csv("../data/DATA3888 Survey_May 12, 2024_17.08.csv")
+survey <- survey[-(1:2), ]
+```
+
+## Cleaning - Q3
+
+```{r}
+survey$Q3[survey$Q3== "No understanding"] <- 0
+survey$Q3[survey$Q3== "Limited understanding"] <- 0.25
+survey$Q3[survey$Q3== "Basic understanding"] <- 0.5
+survey$Q3[survey$Q3== "Good understanding"] <- 0.75
+survey$Q3[survey$Q3== "Strong understanding"] <- 1
+```
+
+## Cleaning - Q4
+
+```{r}
+survey$Q4 <- ifelse((survey$Q4_3 == "1" | survey$Q4_3 == "2") & survey$Q4_1 == "3", 1, 0)
+survey <- survey %>% 
+  select(-Q4_1, -Q4_2, -Q4_3)
+```
+
+## Cleaning - Q5
+
+```{r}
+survey$Q5 <- ifelse(grepl("^120", survey$Q5), 1, 0)
+```
+
+## Cleaning - Q6
+
+```{r}
+survey$Q6[survey$Q6== "No understanding"] <- 0
+survey$Q6[survey$Q6== "Limited understanding"] <- 0.25
+survey$Q6[survey$Q6== "Basic understanding"] <- 0.5
+survey$Q6[survey$Q6== "Good understanding"] <- 0.75
+survey$Q6[survey$Q6== "Strong understanding"] <- 1
+```
+
+## Cleaning - Q7
+
+```{r}
+survey$Q7 <- ifelse(grepl("Historical volatility", survey$Q7), 1, 0)
+```
+
+## Cleaning - Q8
+
+```{r}
+survey$Q8 <- ifelse(grepl("0.02268", survey$Q8), 1, 0)
+```
+
+## Cleaning - Q9
+
+```{r}
+survey$Q9[survey$Q9== "No understanding"] <- 0
+survey$Q9[survey$Q9== "Limited understanding"] <- 0.25
+survey$Q9[survey$Q9== "Basic understanding"] <- 0.5
+survey$Q9[survey$Q9== "Good understanding"] <- 0.75
+survey$Q9[survey$Q9== "Strong understanding"] <- 1
+```
+
+## Survey - Q18
+
+```{r}
+survey$Q18 <- ifelse(grepl("Yes", survey$Q18), 1, 0)
+```
+
+## Survey - Q14
+
+```{r}
+survey$Q14[survey$Q14== "No understanding"] <- 0
+survey$Q14[survey$Q14== "Limited understanding"] <- 0.25
+survey$Q14[survey$Q14== "Basic understanding"] <- 0.5
+survey$Q14[survey$Q14== "Good understanding"] <- 0.75
+survey$Q14[survey$Q14== "Strong understanding"] <- 1
+```
+
+## Survey - Q15
+
+```{r}
+survey$Q15 <- ifelse(grepl("Yes", survey$Q15), 1, 0)
+```
+
+## Survey - Q16
+
+```{r}
+survey$Q16 <- ifelse(survey$Q16 == "sum(decisions)/N" | grepl("5.5", survey$Q16), 1, 0)
+```
+
+## Rearrange columns
+
+```{r}
+# Get the number of columns in the dataframe
+num_columns <- ncol(survey)
+
+# Rearrange the columns by specifying their new order
+survey <- survey[, c(1:3, num_columns, 4:(num_columns-1))]
+```
+
+## Columns - GENERAL and TECHNICAL Stakeholder columns
+
+```{r}
+survey <- survey %>%
+  mutate(across(.cols = 3:ncol(survey), ~as.numeric(as.character(.))))
+
+#Q3, Q4, Q5
+survey$LinearConfidence <- survey$Q3
+survey$LinearTest <- rowSums(survey[c("Q4", "Q5")], na.rm = TRUE)
+survey$LinearTechnical <- survey$LinearConfidence * 0.3 + survey$LinearTest/2 * 0.7
+survey$LinearGeneral <- survey$LinearConfidence * 0.5 + survey$LinearTest/2 * 0.5
+
+#Q6, Q7, Q8
+survey$HAVConfidence <- survey$Q6
+survey$HAVTest <- rowSums(survey[c("Q7", "Q8")], na.rm = TRUE)
+survey$HAVTechnical <- survey$HAVConfidence * 0.3 + survey$HAVTest/2 * 0.7
+survey$HAVGeneral <- survey$HAVConfidence * 0.5 + survey$HAVTest/2 * 0.5
+
+#Q9, 18
+survey$SVMConfidence <- survey$Q9
+survey$SVMTest <- rowSums(survey[c("Q18")], na.rm = TRUE)
+survey$SVMTechnical <- survey$SVMConfidence * 0.3 + survey$SVMTest * 0.7
+survey$SVMGeneral <- survey$SVMConfidence * 0.5 + survey$SVMTest * 0.5
+
+#Q14, Q15, Q16
+survey$RFConfidence <- survey$Q14
+survey$RFTest <- rowSums(survey[c("Q15", "Q16")], na.rm = TRUE)
+survey$RFTechnical <- survey$RFConfidence * 0.3 + survey$RFTest/2 * 0.7
+survey$RFGeneral <- survey$RFConfidence * 0.5 + survey$RFTest/2 * 0.5
+
+write.csv(survey, "../data/cleaned_survey.csv")
+```
+
+## Calculate scores for each model
+
+```{r}
+technical <- survey |> filter(
+  Q1 == "Intermediate proficiency (Some understanding of financial concepts/terminology)" |
+    Q1 == "Advanced (Fluency in financial concepts/terminology)")
+
+general <- survey |> filter(
+  Q1 == "Zero/minimal (No/very little exposure to financial concepts/terminology)")
+
+models <- c("Linear", "HAV", "SVM", "RF")
+technical_scores <- c(mean(technical$LinearTechnical), mean(technical$HAVTechnical),mean(technical$SVMTechnical), mean(technical$RFTechnical))
+general_scores <- c(mean(general$LinearGeneral), mean(general$HAVGeneral), mean(general$SVMGeneral), mean(general$RFGeneral))
+scores <- data.frame(models, technical_scores, general_scores)
+scores
+```
